@@ -1,20 +1,42 @@
 // LiveKit Client SDK Bridge for Lembah Kenanga Virtual Office.
 // Native ES Module integration using browser CDN (zero bundler).
+// Manages real hardware capture (Mic, Camera, Screen) with graceful browser API fallbacks.
 
 const LIVEKIT_CDN_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.6.4/dist/livekit-client.esm.mjs';
 
 export class LiveKitBridge {
-  constructor({ onParticipantConnected, onParticipantDisconnected, onTrackSubscribed, onTrackUnsubscribed, onActiveSpeakersChanged }) {
+  constructor({
+    onParticipantConnected,
+    onParticipantDisconnected,
+    onTrackSubscribed,
+    onTrackUnsubscribed,
+    onActiveSpeakersChanged,
+    onLocalTrackChanged,
+    onLocalSpeakingChanged,
+  } = {}) {
     this.onParticipantConnected = onParticipantConnected;
     this.onParticipantDisconnected = onParticipantDisconnected;
     this.onTrackSubscribed = onTrackSubscribed;
     this.onTrackUnsubscribed = onTrackUnsubscribed;
     this.onActiveSpeakersChanged = onActiveSpeakersChanged;
+    this.onLocalTrackChanged = onLocalTrackChanged;
+    this.onLocalSpeakingChanged = onLocalSpeakingChanged;
 
     this.sdk = null;
     this.room = null;
     this.connected = false;
-    this.localTracks = { audio: null, video: null, screen: null };
+    this.localTracks = { audio: false, video: false, screen: false };
+
+    // Real media stream objects for local hardware
+    this.localAudioMediaTrack = null;
+    this.localVideoMediaTrack = null;
+    this.localScreenMediaTrack = null;
+
+    // Local VAD (Voice Activity Detection)
+    this.vadCtx = null;
+    this.vadAnalyser = null;
+    this.vadInterval = null;
+    this.isSpeaking = false;
   }
 
   /** Dynamically import LiveKit SDK in the browser. */
@@ -24,16 +46,13 @@ export class LiveKitBridge {
       this.sdk = await import(/* webpackIgnore: true */ LIVEKIT_CDN_URL);
       return this.sdk;
     } catch (e) {
-      console.warn('LiveKit SDK could not be loaded from CDN:', e);
+      console.warn('[LiveKit] SDK could not be loaded from CDN:', e);
       return null;
     }
   }
 
   /**
    * Request access token from backend service.
-   * @param {string} username
-   * @param {string} room
-   * @param {string} avatar
    */
   async fetchToken(username, room = 'valley', avatar = 'player_m') {
     const res = await fetch('/api/livekit/token', {
@@ -48,15 +67,15 @@ export class LiveKitBridge {
 
   /**
    * Connect to LiveKit Room and bind event listeners.
-   * @param {string} url - LiveKit server URL (e.g. ws://127.0.0.1:7880)
-   * @param {string} token - Signed JWT access token
-   * @param {object} opts - { audio: boolean, video: boolean }
    */
   async connect(url, token, opts = { audio: false, video: false }) {
     const sdk = await this.loadSDK();
-    if (!sdk) throw new Error('LiveKit SDK not available');
+    if (!sdk) {
+      console.warn('[LiveKit] Operating in local browser media mode.');
+      return null;
+    }
 
-    const { Room, RoomEvent, Track } = sdk;
+    const { Room, RoomEvent } = sdk;
     this.room = new Room({
       adaptiveStream: true,
       dynacast: true,
@@ -79,52 +98,242 @@ export class LiveKitBridge {
         this.onActiveSpeakersChanged?.(speakers);
       });
 
-    await this.room.connect(url, token);
-    this.connected = true;
+    try {
+      await this.room.connect(url, token);
+      this.connected = true;
+      console.log('[LiveKit] Connected to room:', this.room.name);
+    } catch (e) {
+      console.warn('[LiveKit] Connection to SFU server deferred/failed:', e.message);
+      this.connected = false;
+    }
 
-    if (opts.audio) {
-      await this.setMicrophone(true);
-    }
-    if (opts.video) {
-      await this.setCamera(true);
-    }
+    if (opts.audio) await this.setMicrophone(true);
+    if (opts.video) await this.setCamera(true);
 
     return this.room;
   }
 
-  async setMicrophone(enabled) {
-    if (!this.room) return;
-    try {
-      await this.room.localParticipant.setMicrophoneEnabled(enabled);
-      this.localTracks.audio = enabled;
-    } catch (e) {
-      console.warn('Microphone permission or hardware error:', e);
+  /**
+   * Activate or deactivate local microphone.
+   * Acquires browser audio media track and registers Voice Activity Detection.
+   */
+  async setMicrophone(enabled, deviceId = null) {
+    this.localTracks.audio = enabled;
+
+    if (enabled) {
+      let rawTrack = null;
+
+      // 1. LiveKit Room publishing if connected
+      if (this.room?.localParticipant) {
+        try {
+          const pub = await this.room.localParticipant.setMicrophoneEnabled(true, deviceId ? { deviceId } : undefined);
+          rawTrack = pub?.track?.mediaStreamTrack;
+        } catch (e) {
+          console.warn('[LiveKit] setMicrophoneEnabled error:', e);
+        }
+      }
+
+      // 2. Direct browser getUserMedia capture (fallback or direct audio stream)
+      if (!rawTrack && navigator.mediaDevices?.getUserMedia) {
+        try {
+          const constraints = {
+            audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+          };
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          rawTrack = stream.getAudioTracks()[0];
+        } catch (e) {
+          console.warn('[LiveKit] Browser getUserMedia audio error:', e);
+          this.localTracks.audio = false;
+          throw e;
+        }
+      }
+
+      if (rawTrack) {
+        this.localAudioMediaTrack = rawTrack;
+        this.startVAD(new MediaStream([rawTrack]));
+        this.onLocalTrackChanged?.('audio', true, rawTrack);
+      }
+    } else {
+      // Disable mic
+      if (this.room?.localParticipant) {
+        try {
+          await this.room.localParticipant.setMicrophoneEnabled(false);
+        } catch {}
+      }
+      if (this.localAudioMediaTrack) {
+        this.localAudioMediaTrack.stop();
+        this.localAudioMediaTrack = null;
+      }
+      this.stopVAD();
+      this.onLocalTrackChanged?.('audio', false, null);
     }
+
+    return this.localTracks.audio;
   }
 
-  async setCamera(enabled) {
-    if (!this.room) return;
-    try {
-      await this.room.localParticipant.setCameraEnabled(enabled);
-      this.localTracks.video = enabled;
-    } catch (e) {
-      console.warn('Camera permission or hardware error:', e);
+  /**
+   * Activate or deactivate local webcam.
+   * Acquires browser video media track for local preview and remote publishing.
+   */
+  async setCamera(enabled, deviceId = null) {
+    this.localTracks.video = enabled;
+
+    if (enabled) {
+      let rawTrack = null;
+
+      // 1. LiveKit Room publishing if connected
+      if (this.room?.localParticipant) {
+        try {
+          const pub = await this.room.localParticipant.setCameraEnabled(true, deviceId ? { deviceId } : undefined);
+          rawTrack = pub?.track?.mediaStreamTrack;
+        } catch (e) {
+          console.warn('[LiveKit] setCameraEnabled error:', e);
+        }
+      }
+
+      // 2. Direct browser getUserMedia capture
+      if (!rawTrack && navigator.mediaDevices?.getUserMedia) {
+        try {
+          const constraints = {
+            video: deviceId
+              ? { deviceId: { exact: deviceId }, width: { ideal: 320 }, height: { ideal: 240 } }
+              : { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 24 } },
+          };
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          rawTrack = stream.getVideoTracks()[0];
+        } catch (e) {
+          console.warn('[LiveKit] Browser getUserMedia video error:', e);
+          this.localTracks.video = false;
+          throw e;
+        }
+      }
+
+      if (rawTrack) {
+        this.localVideoMediaTrack = rawTrack;
+        this.onLocalTrackChanged?.('video', true, rawTrack);
+      }
+    } else {
+      // Disable camera
+      if (this.room?.localParticipant) {
+        try {
+          await this.room.localParticipant.setCameraEnabled(false);
+        } catch {}
+      }
+      if (this.localVideoMediaTrack) {
+        this.localVideoMediaTrack.stop();
+        this.localVideoMediaTrack = null;
+      }
+      this.onLocalTrackChanged?.('video', false, null);
     }
+
+    return this.localTracks.video;
   }
 
+  /**
+   * Activate or deactivate screen sharing.
+   */
   async setScreenShare(enabled) {
-    if (!this.room) return;
+    this.localTracks.screen = enabled;
+
+    if (enabled) {
+      let rawTrack = null;
+      if (this.room?.localParticipant) {
+        try {
+          const pub = await this.room.localParticipant.setScreenShareEnabled(true);
+          rawTrack = pub?.track?.mediaStreamTrack;
+        } catch (e) {
+          console.warn('[LiveKit] setScreenShareEnabled error:', e);
+        }
+      }
+
+      if (!rawTrack && navigator.mediaDevices?.getDisplayMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          rawTrack = stream.getVideoTracks()[0];
+          rawTrack.onended = () => this.setScreenShare(false);
+        } catch (e) {
+          this.localTracks.screen = false;
+          throw e;
+        }
+      }
+
+      if (rawTrack) {
+        this.localScreenMediaTrack = rawTrack;
+        this.onLocalTrackChanged?.('screen', true, rawTrack);
+      }
+    } else {
+      if (this.room?.localParticipant) {
+        try {
+          await this.room.localParticipant.setScreenShareEnabled(false);
+        } catch {}
+      }
+      if (this.localScreenMediaTrack) {
+        this.localScreenMediaTrack.stop();
+        this.localScreenMediaTrack = null;
+      }
+      this.onLocalTrackChanged?.('screen', false, null);
+    }
+
+    return this.localTracks.screen;
+  }
+
+  /**
+   * Local Voice Activity Detection (VAD) loop.
+   * Calculates energy level from microphone stream to highlight speaking border.
+   */
+  startVAD(stream) {
+    this.stopVAD();
     try {
-      await this.room.localParticipant.setScreenShareEnabled(enabled);
-      this.localTracks.screen = enabled;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.vadCtx = new AC();
+      const source = this.vadCtx.createMediaStreamSource(stream);
+      this.vadAnalyser = this.vadCtx.createAnalyser();
+      this.vadAnalyser.fftSize = 256;
+      source.connect(this.vadAnalyser);
+
+      const buffer = new Uint8Array(this.vadAnalyser.frequencyBinCount);
+      this.vadInterval = setInterval(() => {
+        if (!this.vadAnalyser) return;
+        this.vadAnalyser.getByteFrequencyData(buffer);
+        let sum = 0;
+        for (let i = 0; i < buffer.length; i++) sum += buffer[i];
+        const avg = sum / buffer.length;
+        const speaking = avg > 14; // Sensitivity threshold for human voice
+
+        if (speaking !== this.isSpeaking) {
+          this.isSpeaking = speaking;
+          this.onLocalSpeakingChanged?.(speaking);
+        }
+      }, 80);
     } catch (e) {
-      console.warn('Screen share cancelled or failed:', e);
+      console.warn('[LiveKit] VAD initialization skipped:', e);
+    }
+  }
+
+  stopVAD() {
+    if (this.vadInterval) {
+      clearInterval(this.vadInterval);
+      this.vadInterval = null;
+    }
+    if (this.vadCtx) {
+      try { this.vadCtx.close(); } catch {}
+      this.vadCtx = null;
+    }
+    this.vadAnalyser = null;
+    if (this.isSpeaking) {
+      this.isSpeaking = false;
+      this.onLocalSpeakingChanged?.(false);
     }
   }
 
   disconnect() {
+    this.setMicrophone(false);
+    this.setCamera(false);
+    this.setScreenShare(false);
+
     if (this.room) {
-      this.room.disconnect();
+      try { this.room.disconnect(); } catch {}
       this.room = null;
     }
     this.connected = false;

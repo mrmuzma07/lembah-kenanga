@@ -68,10 +68,14 @@ export class SpatialAVSystem {
       }
       gainNode.connect(ctx.destination);
 
-      // Hidden audio element for browser media lifecycle compatibility
+      // Audio element keeps WebRTC audio decoding active in the browser
       const audioEl = document.createElement('audio');
-      audioEl.muted = true; // Muted in DOM because Web Audio handles output
+      audioEl.autoplay = true;
+      audioEl.playsInline = true;
       audioEl.srcObject = stream;
+      // Do not use audioEl.muted = true because Chromium mutes MediaStreamSourceNode!
+      // Set volume = 0 to prevent raw duplicate output while Web Audio handles spatialized sound.
+      audioEl.volume = 0;
       audioEl.play().catch(() => {});
 
       this.participants.set(identity, {
@@ -197,19 +201,23 @@ export class SpatialAVSystem {
         pan = clamp((remote.x - player.x) / R_MAX, -1.0, 1.0);
       }
 
-      // Apply to Web Audio nodes
+      // Apply to Web Audio nodes with direct HTMLAudioElement fallback
       const audioEntry = this.participants.get(identity);
-      if (audioEntry && ctx) {
+      if (audioEntry) {
         audioEntry.dist = dist;
         audioEntry.volume = volume;
         audioEntry.pan = pan;
 
-        audioEntry.gainNode.gain.cancelScheduledValues(now);
-        audioEntry.gainNode.gain.linearRampToValueAtTime(volume, now + 0.05);
+        if (ctx && audioEntry.gainNode) {
+          audioEntry.gainNode.gain.cancelScheduledValues(now);
+          audioEntry.gainNode.gain.linearRampToValueAtTime(volume, now + 0.05);
 
-        if (audioEntry.pannerNode) {
-          audioEntry.pannerNode.pan.cancelScheduledValues(now);
-          audioEntry.pannerNode.pan.linearRampToValueAtTime(pan, now + 0.05);
+          if (audioEntry.pannerNode) {
+            audioEntry.pannerNode.pan.cancelScheduledValues(now);
+            audioEntry.pannerNode.pan.linearRampToValueAtTime(pan, now + 0.05);
+          }
+        } else if (audioEntry.audioElement) {
+          audioEntry.audioElement.volume = volume;
         }
       }
 

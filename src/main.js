@@ -269,6 +269,14 @@ async function boot() {
     onActiveSpeakersChanged: (speakers) => {
       state.videoOverlay?.setActiveSpeakers(speakers);
     },
+    onLocalTrackChanged: (kind, enabled, track) => {
+      if (kind === 'video') {
+        state.videoOverlay?.setLocalVideoTrack(enabled ? track : null);
+      }
+    },
+    onLocalSpeakingChanged: (speaking) => {
+      state.videoOverlay?.setLocalSpeaking(speaking);
+    },
   });
   state.spatialAV.bridge = state.livekit;
   state.videoOverlay.bridge = state.livekit;

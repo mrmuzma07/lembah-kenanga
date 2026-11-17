@@ -26,6 +26,7 @@ import argparse
 import http.server
 import os
 import socketserver
+import sys
 from urllib.parse import urlparse, parse_qs
 
 import chat
@@ -101,18 +102,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if not self._rebase():
             return
+        if self.path in ("/favicon.ico", "favicon.ico"):
+            self.send_response(204)
+            self.end_headers()
+            return
         if self.headers.get("Upgrade", "").lower() == "websocket":
             if ws.handle(self):
                 return
-        if self._api("GET"):
-            return
-        super().do_GET()
+        try:
+            if self._api("GET"):
+                return
+            super().do_GET()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def do_POST(self):
         if not self._rebase():
             return
-        if not self._api("POST"):
-            self.send_error(405)
+        try:
+            if not self._api("POST"):
+                self.send_error(405)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     # -- headers ------------------------------------------------------------
     def end_headers(self):
@@ -134,6 +145,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        """Abaikan error pemutusan koneksi klien (BrokenPipe/ConnectionReset)."""
+        _, err, _ = sys.exc_info()
+        if isinstance(err, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 if __name__ == "__main__":

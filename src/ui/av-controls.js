@@ -95,7 +95,15 @@ export class AVControls {
 
   async toggleMic() {
     this.micEnabled = !this.micEnabled;
-    await this.bridge?.setMicrophone(this.micEnabled);
+    try {
+      await this.bridge?.setMicrophone(this.micEnabled);
+    } catch (e) {
+      this.micEnabled = false;
+      this.btnMic.style.background = '#8a2c1d';
+      this.toolbar.querySelector('#ic-mic').textContent = '🔇';
+      this.onToast?.('Izin mikrofon ditolak / tidak tersedia.');
+      return;
+    }
     this.btnMic.style.background = this.micEnabled ? '#4f9a29' : '#8a2c1d';
     this.toolbar.querySelector('#ic-mic').textContent = this.micEnabled ? '🎙️' : '🔇';
     this.onToast?.(this.micEnabled ? 'Mikrofon Aktif' : 'Mikrofon Dibisukan');
@@ -103,7 +111,15 @@ export class AVControls {
 
   async toggleCam() {
     this.camEnabled = !this.camEnabled;
-    await this.bridge?.setCamera(this.camEnabled);
+    try {
+      await this.bridge?.setCamera(this.camEnabled);
+    } catch (e) {
+      this.camEnabled = false;
+      this.btnCam.style.background = '#8a2c1d';
+      this.toolbar.querySelector('#ic-cam').textContent = '📷';
+      this.onToast?.('Izin kamera ditolak / tidak tersedia.');
+      return;
+    }
     this.btnCam.style.background = this.camEnabled ? '#4f9a29' : '#8a2c1d';
     this.toolbar.querySelector('#ic-cam').textContent = this.camEnabled ? '📹' : '📷';
     this.onToast?.(this.camEnabled ? 'Kamera Aktif' : 'Kamera Dimatikan');
@@ -111,7 +127,14 @@ export class AVControls {
 
   async toggleScreen() {
     this.screenEnabled = !this.screenEnabled;
-    await this.bridge?.setScreenShare(this.screenEnabled);
+    try {
+      await this.bridge?.setScreenShare(this.screenEnabled);
+    } catch (e) {
+      this.screenEnabled = false;
+      this.btnScreen.style.background = '#3f8fd6';
+      this.onToast?.('Berbagi layar dibatalkan.');
+      return;
+    }
     this.btnScreen.style.background = this.screenEnabled ? '#e08a1e' : '#3f8fd6';
     this.onToast?.(this.screenEnabled ? 'Berbagi Layar Dimulai' : 'Berbagi Layar Berhenti');
   }
@@ -184,6 +207,20 @@ export class AVControls {
         if (d.kind === 'audioinput') audioSelect.appendChild(opt);
         if (d.kind === 'videoinput') videoSelect.appendChild(opt);
       }
+
+      audioSelect.onchange = async () => {
+        if (this.micEnabled) {
+          await this.bridge?.setMicrophone(true, audioSelect.value || null);
+          this.onToast?.('Mikrofon diganti.');
+        }
+      };
+
+      videoSelect.onchange = async () => {
+        if (this.camEnabled) {
+          await this.bridge?.setCamera(true, videoSelect.value || null);
+          this.onToast?.('Kamera diganti.');
+        }
+      };
     } catch (e) {
       console.warn('Could not list media devices:', e);
     }

@@ -11,6 +11,7 @@ sini yang bisa membuktikan seseorang benar pemilik username tertentu — yang bi
 dilakukan hanya membuat penyalahgunaan jadi mahal dan berisik.
 """
 import json
+import socket
 import threading
 import time
 
@@ -103,10 +104,14 @@ def text_field(data, key, limit):
 
 
 def send(handler, payload, status=200):
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("X-Content-Type-Options", "nosniff")
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.error):
+        # Klien menutup tab atau memutus koneksi sebelum balasan terkirim
+        pass
