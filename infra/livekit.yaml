@@ -1,0 +1,21 @@
+port: 7880
+bind_addresses:
+  - ""
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50200
+  use_external_ip: false
+
+# API keys for authentication and token validation
+# format: <api_key>: <api_secret>
+keys:
+  devkey: secretkeykenanga1234567890abcdef
+
+logging:
+  level: info
+
+# STUN / TURN servers advertised to clients during ICE negotiation
+turn:
+  enabled: false # Using dedicated Coturn service for enterprise NAT traversal

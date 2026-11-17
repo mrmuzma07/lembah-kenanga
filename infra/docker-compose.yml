@@ -1,0 +1,36 @@
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: lk-livekit-sfu
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50200:50000-50200/udp"
+    environment:
+      LIVEKIT_KEYS: "devkey: secretkeykenanga1234567890abcdef"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7880/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: lk-coturn-turn
+    restart: unless-stopped
+    volumes:
+      - ./turnserver.conf:/etc/turnserver.conf:ro
+    command: -c /etc/turnserver.conf
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49152-49250:49152-49250/udp"
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_uclient -u kenanga -w turnsecret2026 -m 1 127.0.0.1 || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 3

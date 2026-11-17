@@ -30,6 +30,7 @@ from urllib.parse import urlparse, parse_qs
 
 import chat
 import guard
+import livekit_token
 import players
 import ws
 
@@ -91,7 +92,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return True
         body = self.rfile.read(length) if length else b""
         q = parse_qs(u.query)
-        return chat.handle(self, method, u.path, q, body) or players.handle(self, method, u.path, q, body)
+        return (
+            chat.handle(self, method, u.path, q, body)
+            or players.handle(self, method, u.path, q, body)
+            or livekit_token.handle(self, method, u.path, q, body)
+        )
 
     def do_GET(self):
         if not self._rebase():
