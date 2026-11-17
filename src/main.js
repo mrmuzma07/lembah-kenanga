@@ -17,6 +17,7 @@ import { Animal } from './entities/animal.js';
 import { GameSocket } from './network/socket.js';
 import { LiveKitBridge } from './network/livekit-bridge.js';
 import { SpatialAVSystem } from './systems/spatial-av.js';
+import { drawZones } from './world/zones.js';
 import { Inventory, setItemData, itemDef, HOTBAR } from './systems/inventory.js';
 import { Farming } from './systems/farming.js';
 import { Weather } from './systems/weather.js';
@@ -219,6 +220,13 @@ async function boot() {
   state.spatialAV = new SpatialAVSystem({
     livekitBridge: null,
     getAudioContext: () => state.audio?.ctx,
+    onZoneChange: (zone, prevId) => {
+      if (zone.type === 'private') {
+        showToast(`🔒 Masuk ke: ${zone.name}`, 3.5);
+      } else if (prevId && prevId !== 'open_area') {
+        showToast(`Keluar ke: ${zone.name}`, 2.5);
+      }
+    },
   });
 
   state.livekit = new LiveKitBridge({
@@ -1292,6 +1300,9 @@ function render() {
     const img = assets.images.get(d.sprite);
     const def = assets.manifest.sprites[d.sprite];
     if (img && def) ctx.drawImage(img, Math.round(d.x - def.frame[0] / 2 - cx), Math.round(d.y - def.frame[1] - cy));
+  }
+  if (state.areaId === 'valley') {
+    drawZones(ctx, cx, cy, state.spatialAV?.currentZone, TILE);
   }
 
   const drawables = state.areaId === 'valley' ? drawSoil(cx, cy) : [];

@@ -1,6 +1,9 @@
 // Spatial Audio & Video Proximity Engine for Lembah Kenanga Virtual Space.
 // Implements Gather.town / WorkAdventure style spatial volume attenuation,
-// stereo panning via Web Audio API, and dynamic Selective Track Subscriptions.
+// stereo panning via Web Audio API, dynamic Selective Track Subscriptions,
+// and Private Meeting Room isolation.
+
+import { getZoneAt, ZONE_TYPES } from '../world/zones.js';
 
 export const TILE_SIZE = 32;
 export const R_MIN = 3 * TILE_SIZE; // 96px (~3 tiles): full volume & HD video
@@ -11,12 +14,15 @@ export function clamp(val, min, max) {
 }
 
 export class SpatialAVSystem {
-  constructor({ livekitBridge, getAudioContext }) {
+  constructor({ livekitBridge, getAudioContext, onZoneChange }) {
     this.bridge = livekitBridge;
     this.getAudioContext = getAudioContext;
+    this.onZoneChange = onZoneChange;
     this.audioCtx = null;
     this.participants = new Map(); // identity -> { sourceNode, pannerNode, gainNode, audioElement, dist, volume, pan }
     this.subThrottle = 0;
+    this.currentZone = null;
+    this.lastZoneId = null;
   }
 
   ensureAudioContext() {
@@ -107,6 +113,19 @@ export class SpatialAVSystem {
    */
   update(player, remotePlayers, dt) {
     if (!player) return;
+
+    // Detect zone of the local player
+    const playerCol = Math.floor(player.x / TILE_SIZE);
+    const playerRow = Math.floor(player.y / TILE_SIZE);
+    const myZone = getZoneAt(playerCol, playerRow);
+    this.currentZone = myZone;
+
+    if (this.lastZoneId !== myZone.id) {
+      const prev = this.lastZoneId;
+      this.lastZoneId = myZone.id;
+      this.onZoneChange?.(myZone, prev);
+    }
+
     const room = this.bridge?.room;
     if (!room) return;
 
@@ -137,26 +156,46 @@ export class SpatialAVSystem {
         continue;
       }
 
-      // Calculate Euclidean distance between local player and remote avatar
+      // Detect zone of the remote avatar
+      const remoteCol = Math.floor(remote.x / TILE_SIZE);
+      const remoteRow = Math.floor(remote.y / TILE_SIZE);
+      const theirZone = getZoneAt(remoteCol, remoteRow);
+
+      // Distance calculation
       const dist = Math.hypot(player.x - remote.x, player.y - remote.y);
-      const inRange = dist <= R_MAX;
-
-      // Calculate volume attenuation:
-      // dist <= R_MIN -> 1.0 (100%)
-      // R_MIN < dist <= R_MAX -> linear decrease from 1.0 down to 0.0
-      // dist > R_MAX -> 0.0
       let volume = 0;
-      if (dist <= R_MIN) {
-        volume = 1.0;
-      } else if (dist <= R_MAX) {
-        volume = clamp(1.0 - (dist - R_MIN) / (R_MAX - R_MIN), 0.0, 1.0);
-      }
+      let inRange = false;
+      let pan = 0;
 
-      // Calculate stereo pan:
-      // Avatar to the left -> pan negative (-1)
-      // Avatar to the right -> pan positive (+1)
-      const dx = remote.x - player.x;
-      const pan = clamp(dx / R_MAX, -1.0, 1.0);
+      // --- Room Isolation & Proximity Logic ---
+      if (myZone.type === ZONE_TYPES.PRIVATE && myZone.id === theirZone.id) {
+        // KASUS 1: Di dalam private meeting space yang sama -> 100% volume jernih
+        volume = 1.0;
+        inRange = true;
+        // Mild stereo panning within room
+        pan = clamp((remote.x - player.x) / R_MAX, -0.5, 0.5);
+      } else if (myZone.type === ZONE_TYPES.PRIVATE || theirZone.type === ZONE_TYPES.PRIVATE) {
+        // KASUS 2: Salah satu di private room berbeda -> isolasi total (bisu & mati)
+        volume = 0.0;
+        inRange = false;
+        pan = 0;
+      } else if (myZone.type === ZONE_TYPES.QUIET && myZone.id !== theirZone.id) {
+        // KASUS 2b: Di dalam quiet zone terpisah -> terisolasi dari luar
+        volume = 0.0;
+        inRange = false;
+        pan = 0;
+      } else {
+        // KASUS 3: Keduanya di area terbuka (Open Space) -> Proksimitas jarak standar
+        inRange = dist <= R_MAX;
+        if (dist <= R_MIN) {
+          volume = 1.0;
+        } else if (dist <= R_MAX) {
+          volume = clamp(1.0 - (dist - R_MIN) / (R_MAX - R_MIN), 0.0, 1.0);
+        } else {
+          volume = 0.0;
+        }
+        pan = clamp((remote.x - player.x) / R_MAX, -1.0, 1.0);
+      }
 
       // Apply to Web Audio nodes
       const audioEntry = this.participants.get(identity);
