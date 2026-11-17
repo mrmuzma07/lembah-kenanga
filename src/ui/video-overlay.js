@@ -8,7 +8,10 @@ export class VideoOverlay {
     this.onOpenScreenShare = onOpenScreenShare;
     this.mode = 'bubble'; // 'bubble' | 'dock'
     this.activeSpeakers = new Set(); // participant identities speaking
-    this.screenShareTracks = new Map(); // identity -> track
+
+    // Track registries (identity -> MediaStreamTrack or RemoteTrack)
+    this.remoteVideoTracks = new Map();
+    this.screenShareTracks = new Map();
 
     this.localVideoTrack = null;
     this.localSpeaking = false;
@@ -16,7 +19,7 @@ export class VideoOverlay {
     this.container = null;
     this.dockContainer = null;
     this.projectorModal = null;
-    this.bubbles = new Map(); // identity -> { el, frameEl, videoEl, avatarImg, screenBtn, nameEl, isLocal }
+    this.bubbles = new Map(); // key -> { el, frameEl, videoEl, avatarImg, screenBtn, nameBadge, isLocal, rpId, identity, livekitId }
     this.activeProjector = null; // { identity, track }
 
     this.initDOM();
@@ -120,10 +123,7 @@ export class VideoOverlay {
     const bubble = this.bubbles.get('__local__');
     if (bubble) {
       if (track) {
-        bubble.videoEl.srcObject = new MediaStream([track]);
-        bubble.videoEl.style.display = 'block';
-        bubble.videoEl.muted = true;
-        bubble.videoEl.play().catch(() => {});
+        this.bindTrackToVideoElement(bubble.videoEl, track, true);
       } else {
         bubble.videoEl.style.display = 'none';
         bubble.videoEl.srcObject = null;
@@ -153,6 +153,73 @@ export class VideoOverlay {
     }
   }
 
+  attachVideoTrack(identity, track) {
+    this.remoteVideoTracks.set(identity, track);
+
+    // Attempt to bind immediately if matching bubble already exists
+    for (const bubble of this.bubbles.values()) {
+      if (this.isIdentityMatch(bubble, identity)) {
+        this.bindTrackToVideoElement(bubble.videoEl, track);
+        break;
+      }
+    }
+  }
+
+  detachVideoTrack(identity) {
+    this.remoteVideoTracks.delete(identity);
+
+    for (const bubble of this.bubbles.values()) {
+      if (this.isIdentityMatch(bubble, identity)) {
+        bubble.videoEl.style.display = 'none';
+        bubble.videoEl.srcObject = null;
+        break;
+      }
+    }
+  }
+
+  isIdentityMatch(bubble, identity) {
+    if (!bubble) return false;
+    if (bubble.identity === identity || bubble.rpId === identity || bubble.livekitId === identity) return true;
+    if (identity && bubble.identity && (identity.includes(bubble.identity) || bubble.identity.includes(identity))) return true;
+    if (identity && bubble.rpId && (identity.includes(bubble.rpId) || bubble.rpId.includes(identity))) return true;
+    return false;
+  }
+
+  findTrackForRemotePlayer(rp) {
+    const keys = [rp.livekitId, rp.name, rp.id].filter(Boolean);
+    for (const k of keys) {
+      if (this.remoteVideoTracks.has(k)) return this.remoteVideoTracks.get(k);
+    }
+    // Search substring match
+    for (const [idKey, trk] of this.remoteVideoTracks.entries()) {
+      if (keys.some(k => idKey.includes(k) || k.includes(idKey))) {
+        return trk;
+      }
+    }
+    return null;
+  }
+
+  bindTrackToVideoElement(videoEl, track, isLocal = false) {
+    if (!videoEl || !track) return;
+    videoEl.style.display = 'block';
+    if (isLocal) videoEl.muted = true;
+
+    try {
+      if (track.attach) {
+        track.attach(videoEl);
+      } else if (track.mediaStreamTrack) {
+        videoEl.srcObject = new MediaStream([track.mediaStreamTrack]);
+      } else if (track instanceof MediaStreamTrack) {
+        videoEl.srcObject = new MediaStream([track]);
+      } else if (track instanceof MediaStream) {
+        videoEl.srcObject = track;
+      }
+      videoEl.play().catch(() => {});
+    } catch (e) {
+      console.warn('[VideoOverlay] Failed to bind track to video:', e);
+    }
+  }
+
   openProjector(identity, track) {
     this.activeProjector = { identity, track };
     const title = this.projectorModal.querySelector('#projector-title');
@@ -167,13 +234,7 @@ export class VideoOverlay {
     videoEl.style.height = '100%';
     videoEl.style.objectFit = 'contain';
 
-    if (track.attach) {
-      track.attach(videoEl);
-    } else if (track.mediaStreamTrack) {
-      videoEl.srcObject = new MediaStream([track.mediaStreamTrack]);
-    } else if (track instanceof MediaStreamTrack) {
-      videoEl.srcObject = new MediaStream([track]);
-    }
+    this.bindTrackToVideoElement(videoEl, track);
     box.appendChild(videoEl);
     this.projectorModal.style.display = 'flex';
   }
@@ -193,20 +254,20 @@ export class VideoOverlay {
 
     const r = canvas.getBoundingClientRect();
     const zoom = view.zoom || 1;
-    const activeIdentities = new Set();
+    const activeKeys = new Set();
 
     // 1. Process Local Player
     if (player) {
-      const localId = '__local__';
-      activeIdentities.add(localId);
+      const localKey = '__local__';
+      activeKeys.add(localKey);
 
       const screenX = r.left + (player.x - camera.ix) * zoom;
       const screenY = r.top + (player.y - camera.iy - 54) * zoom;
 
-      let bubble = this.bubbles.get(localId);
+      let bubble = this.bubbles.get(localKey);
       if (!bubble) {
-        bubble = this.createBubbleElement(localId, player.spriteName, true);
-        this.bubbles.set(localId, bubble);
+        bubble = this.createBubbleElement(localKey, player.spriteName, true);
+        this.bubbles.set(localKey, bubble);
       }
 
       const hasVideo = !!this.localVideoTrack;
@@ -215,7 +276,7 @@ export class VideoOverlay {
         screenY >= r.top - 60 && screenY <= r.bottom + 60
       );
 
-      // In bubble mode, show local bubble if camera is ON or speaking
+      // In bubble mode, show local bubble if camera is ON or user is speaking
       if (this.mode === 'bubble') {
         if (isVisibleOnScreen && (hasVideo || this.localSpeaking)) {
           bubble.el.style.display = 'flex';
@@ -235,25 +296,59 @@ export class VideoOverlay {
         bubble.frameEl.style.borderColor = hasVideo ? '#3f8fd6' : '#3a2a2a';
         bubble.frameEl.style.boxShadow = '0 2px 6px rgba(0,0,0,0.6)';
       }
+
+      if (hasVideo && !bubble.videoEl.srcObject) {
+        this.bindTrackToVideoElement(bubble.videoEl, this.localVideoTrack, true);
+      }
     }
 
     // 2. Process Remote Players
     for (const [id, rp] of remotePlayers.entries()) {
-      const identity = rp.name || rp.id;
-      activeIdentities.add(identity);
-
-      const screenTrack = this.screenShareTracks.get(identity);
+      const rpKey = rp.id || id;
+      activeKeys.add(rpKey);
 
       const screenX = r.left + (rp.x - camera.ix) * zoom;
       const screenY = r.top + (rp.y - camera.iy - 54) * zoom;
 
-      let bubble = this.bubbles.get(identity);
+      let bubble = this.bubbles.get(rpKey);
       if (!bubble) {
-        bubble = this.createBubbleElement(identity, rp.spriteName, false);
-        this.bubbles.set(identity, bubble);
+        bubble = this.createBubbleElement(rp.name || rp.id, rp.spriteName, false);
+        bubble.rpId = rp.id;
+        bubble.identity = rp.name;
+        bubble.livekitId = rp.livekitId;
+        this.bubbles.set(rpKey, bubble);
+      } else {
+        bubble.rpId = rp.id;
+        bubble.identity = rp.name;
+        bubble.livekitId = rp.livekitId;
       }
 
-      const isSpeaking = this.activeSpeakers.has(identity);
+      // Check remote video track
+      const videoTrack = this.findTrackForRemotePlayer(rp);
+      if (videoTrack) {
+        if (bubble.videoEl.style.display === 'none' || !bubble.videoEl.srcObject) {
+          this.bindTrackToVideoElement(bubble.videoEl, videoTrack, false);
+        }
+      } else {
+        if (bubble.videoEl.style.display !== 'none') {
+          bubble.videoEl.style.display = 'none';
+          bubble.videoEl.srcObject = null;
+        }
+      }
+
+      // Check screen share track
+      const screenTrack = (
+        this.screenShareTracks.get(rp.livekitId) ||
+        this.screenShareTracks.get(rp.name) ||
+        this.screenShareTracks.get(rp.id)
+      );
+
+      const isSpeaking = (
+        this.activeSpeakers.has(rp.livekitId) ||
+        this.activeSpeakers.has(rp.name) ||
+        this.activeSpeakers.has(rp.id)
+      );
+
       const isVisibleOnScreen = (
         screenX >= r.left - 60 && screenX <= r.right + 60 &&
         screenY >= r.top - 60 && screenY <= r.bottom + 60
@@ -276,16 +371,16 @@ export class VideoOverlay {
         bubble.frameEl.style.borderColor = '#4f9a29';
         bubble.frameEl.style.boxShadow = '0 0 12px #4f9a29, 0 0 4px #6abe30';
       } else {
-        bubble.frameEl.style.borderColor = '#3a2a2a';
+        bubble.frameEl.style.borderColor = videoTrack ? '#3f8fd6' : '#3a2a2a';
         bubble.frameEl.style.boxShadow = '0 2px 6px rgba(0,0,0,0.6)';
       }
 
-      // Screen share pill button
+      // Screen share button
       if (screenTrack) {
         bubble.screenBtn.style.display = 'block';
         bubble.screenBtn.onclick = (e) => {
           e.stopPropagation();
-          this.openProjector(identity, screenTrack);
+          this.openProjector(rp.name || rp.id, screenTrack);
         };
       } else {
         bubble.screenBtn.style.display = 'none';
@@ -293,10 +388,10 @@ export class VideoOverlay {
     }
 
     // Clean up participants that left
-    for (const [identity, bubble] of this.bubbles.entries()) {
-      if (!activeIdentities.has(identity)) {
+    for (const [key, bubble] of this.bubbles.entries()) {
+      if (!activeKeys.has(key)) {
         bubble.el.remove();
-        this.bubbles.delete(identity);
+        this.bubbles.delete(key);
       }
     }
   }
@@ -356,14 +451,13 @@ export class VideoOverlay {
     });
 
     if (isLocal && this.localVideoTrack) {
-      video.srcObject = new MediaStream([this.localVideoTrack]);
-      video.style.display = 'block';
+      this.bindTrackToVideoElement(video, this.localVideoTrack, true);
     }
     frame.appendChild(video);
 
     el.appendChild(frame);
 
-    // Name badge for dock mode
+    // Name badge for dock mode or hover
     const nameBadge = document.createElement('span');
     nameBadge.textContent = isLocal ? '(Kamu)' : identity;
     Object.assign(nameBadge.style, {
@@ -410,26 +504,7 @@ export class VideoOverlay {
       nameBadge,
       screenBtn,
       isLocal,
+      identity,
     };
-  }
-
-  attachVideoTrack(identity, track) {
-    const bubble = this.bubbles.get(identity);
-    if (!bubble) return;
-    bubble.videoEl.style.display = 'block';
-    if (track.attach) {
-      track.attach(bubble.videoEl);
-    } else if (track.mediaStreamTrack) {
-      bubble.videoEl.srcObject = new MediaStream([track.mediaStreamTrack]);
-    } else if (track instanceof MediaStreamTrack) {
-      bubble.videoEl.srcObject = new MediaStream([track]);
-    }
-  }
-
-  detachVideoTrack(identity) {
-    const bubble = this.bubbles.get(identity);
-    if (!bubble) return;
-    bubble.videoEl.style.display = 'none';
-    bubble.videoEl.srcObject = null;
   }
 }

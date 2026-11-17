@@ -176,11 +176,17 @@ async function boot() {
     },
   });
 
+  // Unique per-tab session ID to prevent LiveKit duplicate identity collision
+  const sessionId = state.profile.id || (state.profile.id = 'u_' + Math.random().toString(36).slice(2, 8));
+  const uniqueLivekitId = `${state.profile.name}#${sessionId.slice(-4)}`;
+  state.livekitId = uniqueLivekitId;
+
   // Real-time multiplayer synchronization via WebSocket
   state.socket = new GameSocket({
     getPlayerState: () => ({
       name: state.profile.name,
       avatar: avatarOf(state.profile),
+      livekitId: uniqueLivekitId,
       x: Math.round(state.player.x),
       y: Math.round(state.player.y),
       dir: state.player.dir,
@@ -218,6 +224,7 @@ async function boot() {
       }
     },
   });
+  state.socket.livekitId = uniqueLivekitId;
   state.socket.connect();
 
   // Spatial Audio & Video Proximity Engine linked to LiveKit WebRTC
@@ -287,9 +294,28 @@ async function boot() {
     onToast: (msg) => showToast(msg, 2.5),
   });
 
-  state.livekit.fetchToken(state.profile.name, 'valley', avatarOf(state.profile))
+  state.livekit.fetchToken(uniqueLivekitId, 'valley', avatarOf(state.profile))
     .then((auth) => {
       return state.livekit.connect(auth.url, auth.token, { audio: false, video: false });
+    })
+    .then((room) => {
+      if (!room) return;
+      // Attach any tracks from participants already present when this client joined
+      for (const [, p] of room.remoteParticipants) {
+        for (const [, pub] of p.trackPublications) {
+          if (pub.track) {
+            if (pub.kind === 'audio') {
+              state.spatialAV?.attachAudioTrack(pub.track, p.identity);
+            } else if (pub.kind === 'video') {
+              if (pub.source === 'screen_share') {
+                state.videoOverlay?.registerScreenTrack(p.identity, pub.track);
+              } else {
+                state.videoOverlay?.attachVideoTrack(p.identity, pub.track);
+              }
+            }
+          }
+        }
+      }
     })
     .catch((err) => {
       console.warn('[LiveKit] Background connect deferred:', err.message);

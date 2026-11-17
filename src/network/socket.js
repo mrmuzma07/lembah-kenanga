@@ -16,6 +16,7 @@ export class GameSocket {
     this.pingTimer = null;
     this.lastSendTime = 0;
     this.lastSentMoving = null;
+    this.livekitId = null;
     this.sendInterval = 1000 / 20; // 20 Hz
   }
 
@@ -136,6 +137,7 @@ export class GameSocket {
         speed: player.speed,
         animT: +player.animT.toFixed(3),
         avatar: player.spriteName,
+        livekitId: this.livekitId,
       });
     }
   }

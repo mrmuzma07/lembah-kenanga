@@ -12,6 +12,7 @@ export class RemotePlayer extends Character {
     super(data.avatar || 'player_m', data.x || 0, data.y || 0);
     this.id = data.id;
     this.name = data.name || 'Pemain';
+    this.livekitId = data.livekitId || data.id || data.name;
     this.targetX = this.x;
     this.targetY = this.y;
     this.targetDir = data.dir || 'down';
@@ -25,6 +26,7 @@ export class RemotePlayer extends Character {
       this.spriteName = data.avatar;
     }
     if (data.name) this.name = data.name;
+    if (data.livekitId) this.livekitId = data.livekitId;
     this.targetX = data.x;
     this.targetY = data.y;
     this.targetDir = data.dir || this.targetDir;

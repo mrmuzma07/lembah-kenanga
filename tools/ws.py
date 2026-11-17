@@ -138,7 +138,7 @@ class MultiplayerHub:
             if not client:
                 return None
             player = client["player"]
-            for k in ("name", "avatar", "x", "y", "dir", "moving", "speed", "animT"):
+            for k in ("name", "avatar", "x", "y", "dir", "moving", "speed", "animT", "livekitId"):
                 if k in data:
                     player[k] = data[k]
             return dict(player)
@@ -239,6 +239,7 @@ def handle(handler):
                             "speed": updated["speed"],
                             "animT": updated["animT"],
                             "avatar": updated["avatar"],
+                            "livekitId": updated.get("livekitId"),
                         }, exclude_id=client_id)
                 elif mtype == "avatar":
                     avatar = msg.get("avatar")

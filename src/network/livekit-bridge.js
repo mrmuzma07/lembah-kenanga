@@ -2,7 +2,8 @@
 // Native ES Module integration using browser CDN (zero bundler).
 // Manages real hardware capture (Mic, Camera, Screen) with graceful browser API fallbacks.
 
-const LIVEKIT_CDN_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.6.4/dist/livekit-client.esm.mjs';
+const LIVEKIT_CDN_URL = 'https://cdn.jsdelivr.net/npm/livekit-client/+esm';
+const LIVEKIT_BACKUP_CDN = 'https://esm.sh/livekit-client';
 
 export class LiveKitBridge {
   constructor({
@@ -39,16 +40,21 @@ export class LiveKitBridge {
     this.isSpeaking = false;
   }
 
-  /** Dynamically import LiveKit SDK in the browser. */
+  /** Dynamically import LiveKit SDK in the browser with CDN fallbacks. */
   async loadSDK() {
     if (this.sdk) return this.sdk;
-    try {
-      this.sdk = await import(/* webpackIgnore: true */ LIVEKIT_CDN_URL);
-      return this.sdk;
-    } catch (e) {
-      console.warn('[LiveKit] SDK could not be loaded from CDN:', e);
-      return null;
+    for (const url of [LIVEKIT_CDN_URL, LIVEKIT_BACKUP_CDN]) {
+      try {
+        this.sdk = await import(/* webpackIgnore: true */ url);
+        if (this.sdk) {
+          console.log('[LiveKit] Successfully loaded SDK from:', url);
+          return this.sdk;
+        }
+      } catch (e) {
+        console.warn(`[LiveKit] Could not load SDK from ${url}:`, e.message);
+      }
     }
+    return null;
   }
 
   /**
@@ -62,6 +68,13 @@ export class LiveKitBridge {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Failed to fetch LiveKit token');
+
+    // Adapt LiveKit URL to current browser hostname if accessing from non-127.0.0.1 (e.g. LAN or localhost)
+    let livekitUrl = data.url;
+    if (livekitUrl.includes('127.0.0.1') && location.hostname && location.hostname !== '127.0.0.1') {
+      livekitUrl = livekitUrl.replace('127.0.0.1', location.hostname);
+    }
+    data.url = livekitUrl;
     return data;
   }
 

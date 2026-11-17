@@ -147,7 +147,14 @@ export class SpatialAVSystem {
       // Find matching remote avatar in the 2D game world
       let remote = null;
       for (const rp of remotePlayers.values()) {
-        if (rp.name === identity || rp.id === identity) {
+        if (
+          rp.livekitId === identity ||
+          rp.name === identity ||
+          rp.id === identity ||
+          identity.startsWith(rp.name) ||
+          identity.includes(rp.id) ||
+          (rp.livekitId && identity.includes(rp.livekitId))
+        ) {
           remote = rp;
           break;
         }
@@ -202,7 +209,10 @@ export class SpatialAVSystem {
       }
 
       // Apply to Web Audio nodes with direct HTMLAudioElement fallback
-      const audioEntry = this.participants.get(identity);
+      const audioEntry = (
+        this.participants.get(identity) ||
+        (remote && (this.participants.get(remote.livekitId) || this.participants.get(remote.name) || this.participants.get(remote.id)))
+      );
       if (audioEntry) {
         audioEntry.dist = dist;
         audioEntry.volume = volume;
