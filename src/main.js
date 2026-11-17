@@ -15,6 +15,8 @@ import { RemotePlayer } from './entities/remote-player.js';
 import { Npc } from './entities/npc.js';
 import { Animal } from './entities/animal.js';
 import { GameSocket } from './network/socket.js';
+import { LiveKitBridge } from './network/livekit-bridge.js';
+import { SpatialAVSystem } from './systems/spatial-av.js';
 import { Inventory, setItemData, itemDef, HOTBAR } from './systems/inventory.js';
 import { Farming } from './systems/farming.js';
 import { Weather } from './systems/weather.js';
@@ -51,6 +53,8 @@ const state = {
   animals: [],
   remotePlayers: new Map(),
   socket: null,
+  livekit: null,
+  spatialAV: null,
   camera: new Camera(view.w, view.h),
   dialog: new Dialog(),
   inv: new Inventory(),
@@ -145,6 +149,8 @@ async function boot() {
   window.addEventListener('pagehide', () => {
     state.chat.leave();
     state.socket?.disconnect();
+    state.livekit?.disconnect();
+    state.spatialAV?.destroy();
   });
 
   state.shopUI = new ShopUI(state.inv, state.player, state.audio);
@@ -208,6 +214,40 @@ async function boot() {
     },
   });
   state.socket.connect();
+
+  // Spatial Audio & Video Proximity Engine linked to LiveKit WebRTC
+  state.spatialAV = new SpatialAVSystem({
+    livekitBridge: null,
+    getAudioContext: () => state.audio?.ctx,
+  });
+
+  state.livekit = new LiveKitBridge({
+    onParticipantConnected: (participant) => {
+      // Participant connected to room
+    },
+    onParticipantDisconnected: (participant) => {
+      state.spatialAV?.detachAudioTrack(participant.identity);
+    },
+    onTrackSubscribed: (track, publication, participant) => {
+      if (track.kind === 'audio') {
+        state.spatialAV?.attachAudioTrack(track, participant.identity);
+      }
+    },
+    onTrackUnsubscribed: (track, publication, participant) => {
+      if (track.kind === 'audio') {
+        state.spatialAV?.detachAudioTrack(participant.identity);
+      }
+    },
+  });
+  state.spatialAV.bridge = state.livekit;
+
+  state.livekit.fetchToken(state.profile.name, 'valley', avatarOf(state.profile))
+    .then((auth) => {
+      return state.livekit.connect(auth.url, auth.token, { audio: false, video: false });
+    })
+    .catch((err) => {
+      console.warn('[LiveKit] Background connect deferred:', err.message);
+    });
 
   // Audio is synthesised, so nothing to download — it just needs a gesture to
   // start, because browsers block audio until the player interacts.
@@ -1047,6 +1087,7 @@ function update(dt) {
 
   for (const n of state.npcs) n.update(map, dt);
   for (const rp of state.remotePlayers.values()) rp.update(dt);
+  state.spatialAV?.update(player, state.remotePlayers, dt);
   state.socket?.syncMove(player);
   state.shadows?.update(dt);
   state.critters?.update(dt, time.hour24);
