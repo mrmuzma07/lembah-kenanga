@@ -2,7 +2,7 @@
 // window so there is no letterboxing: view = floor(window / zoom).
 import { emit } from '../core/events.js';
 
-export const MIN_VIEW = { w: 640, h: 360 }; // never show less than this at any zoom
+export const MIN_VIEW = { w: 960, h: 540 }; // target viewport minimal untuk tampilan luas & detail
 export const MAX_ZOOM = 4;
 
 /** Live logical viewport size — read view.w / view.h, never cache them. */

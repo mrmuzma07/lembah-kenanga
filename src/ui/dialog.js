@@ -30,7 +30,9 @@ export class Dialog {
   draw(ctx) {
     if (!this.active) return;
     const VIEW_W = view.w, VIEW_H = view.h;
-    const h = 150, x = 24, y = VIEW_H - h - 70, w = VIEW_W - 48;
+    const w = Math.min(680, VIEW_W - 48);
+    const x = Math.round((VIEW_W - w) / 2);
+    const h = 150, y = VIEW_H - h - 70;
     panel(ctx, x, y, w, h);
     let tx = x + 20;
     if (this.portrait) {

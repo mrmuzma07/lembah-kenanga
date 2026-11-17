@@ -145,6 +145,16 @@ async function boot() {
     audio: state.audio,
     renderer,
     onQuit: () => { saveGame(); location.href = 'index.html'; },
+    getCharacter: () => avatarOf(state.profile),
+    onSelectCharacter: (selected) => {
+      state.profile.avatar = selected.id;
+      if (state.player) {
+        state.player.spriteName = selected.id;
+      }
+      state.chat?.setIdentity(state.profile.name, selected.id);
+      saveGame();
+      showToast(`Karakter diganti menjadi ${selected.label}!`);
+    },
   });
 
   // Audio is synthesised, so nothing to download — it just needs a gesture to
@@ -895,6 +905,7 @@ function update(dt) {
   }
   if (menu?.open) {
     for (const a of ['up', 'down', 'left', 'right', 'interact']) if (input.pressed(a)) menu.key(a);
+    if (mouse.clicked) menu.click?.(mouse.x, mouse.y);
     input.endFrame();
     return;
   }
@@ -971,7 +982,15 @@ function update(dt) {
     // melompati event jam, sehingga jadwal warga dan lampu malam tidak ikut
     // berubah — persis hal yang biasanya ingin dilihat saat menekan tombol ini.
     if (input.pressed('debugTime')) { time.skip(60); showToast(`[debug] ${time.clockText}`); }
-    if (input.pressed('zoom')) { const z = renderer.cycleZoom(); showToast(`Zoom: ${z ? '×' + z : 'otomatis ×' + view.zoom}`); }
+    if (input.pressed('zoom')) {
+      const z = renderer.cycleZoom();
+      let desc = `otomatis (×${view.zoom})`;
+      if (z === 1) desc = '×1 (Maksimal Luas & Detail)';
+      else if (z === 2) desc = '×2 (Luas & Seimbang)';
+      else if (z === 3) desc = '×3 (Sedang)';
+      else if (z === 4) desc = '×4 (Dekat)';
+      showToast(`Zoom: ${desc}`);
+    }
   }
 
   for (const n of state.npcs) n.update(map, dt);

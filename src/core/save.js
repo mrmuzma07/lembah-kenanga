@@ -8,10 +8,18 @@ export const SAVE_VERSION = 3;
  * menambah karakter berikutnya cukup menambah satu baris di sini.
  */
 export const AVATARS = [
-  { id: 'player_m', label: 'Arya' },
-  { id: 'player_f', label: 'Laras' },
-  { id: 'player_m2', label: 'Damar' },
-  { id: 'player_f2', label: 'Nadia' },
+  { id: 'npc_bayu', key: 'bayu', label: 'Bayu', role: 'Nelayan muda' },
+  { id: 'npc_dadang', key: 'dadang', label: 'Kang Dadang', role: 'Pemilik warung' },
+  { id: 'npc_harun', key: 'harun', label: 'Pak Lurah Harun', role: 'Kepala desa' },
+  { id: 'npc_jaka', key: 'jaka', label: 'Bang Jaka', role: 'Pandai besi' },
+  { id: 'npc_rani', key: 'rani', label: 'Rani', role: 'Pembudidaya bunga' },
+  { id: 'npc_ratna', key: 'ratna', label: 'Dokter Ratna', role: 'Dokter desa' },
+  { id: 'npc_sari', key: 'sari', label: 'Bu Sari', role: 'Pemilik toko' },
+  { id: 'npc_wulan', key: 'wulan', label: 'Nenek Wulan', role: 'Nelayan tua' },
+  { id: 'player_m', key: 'arya', label: 'Arya', role: 'Petani muda' },
+  { id: 'player_m2', key: 'damar', label: 'Damar', role: 'Petani berkacamata' },
+  { id: 'player_f', key: 'laras', label: 'Laras', role: 'Petani muda' },
+  { id: 'player_f2', key: 'nadia', label: 'Nadia', role: 'Petani berkerudung' },
 ];
 
 /**
@@ -22,6 +30,8 @@ export const AVATARS = [
 export function avatarOf(profile) {
   const id = profile?.avatar;
   if (id && AVATARS.some((a) => a.id === id)) return id;
+  const match = AVATARS.find((a) => a.id === id || a.key === id || a.id === `npc_${id}`);
+  if (match) return match.id;
   return profile?.gender === 'f' ? 'player_f' : 'player_m';
 }
 const KEY = (slot) => `lk_save_${slot}`;
