@@ -11,8 +11,10 @@ import { push as pushSave } from './core/account.js';
 import { getArea, markRemoved, removalsToJSON, removalsFromJSON } from './world/areas.js';
 import { TILE } from './world/map.js';
 import { Character } from './entities/character.js';
+import { RemotePlayer } from './entities/remote-player.js';
 import { Npc } from './entities/npc.js';
 import { Animal } from './entities/animal.js';
+import { GameSocket } from './network/socket.js';
 import { Inventory, setItemData, itemDef, HOTBAR } from './systems/inventory.js';
 import { Farming } from './systems/farming.js';
 import { Weather } from './systems/weather.js';
@@ -47,6 +49,8 @@ const state = {
   player: null,
   npcs: [],
   animals: [],
+  remotePlayers: new Map(),
+  socket: null,
   camera: new Camera(view.w, view.h),
   dialog: new Dialog(),
   inv: new Inventory(),
@@ -138,7 +142,10 @@ async function boot() {
   applySchedules();
   // pagehide fires on close, navigation and the mobile back-forward cache;
   // beforeunload does not fire reliably on mobile at all.
-  window.addEventListener('pagehide', () => state.chat.leave());
+  window.addEventListener('pagehide', () => {
+    state.chat.leave();
+    state.socket?.disconnect();
+  });
 
   state.shopUI = new ShopUI(state.inv, state.player, state.audio);
   state.menu = new Menu({
@@ -152,10 +159,55 @@ async function boot() {
         state.player.spriteName = selected.id;
       }
       state.chat?.setIdentity(state.profile.name, selected.id);
+      state.socket?.syncAvatar(selected.id);
       saveGame();
       showToast(`Karakter diganti menjadi ${selected.label}!`);
     },
   });
+
+  // Real-time multiplayer synchronization via WebSocket
+  state.socket = new GameSocket({
+    getPlayerState: () => ({
+      name: state.profile.name,
+      avatar: avatarOf(state.profile),
+      x: Math.round(state.player.x),
+      y: Math.round(state.player.y),
+      dir: state.player.dir,
+      moving: state.player.moving,
+      speed: state.player.speed,
+      animT: +state.player.animT.toFixed(3),
+    }),
+    onInit: (players) => {
+      state.remotePlayers.clear();
+      for (const [id, data] of Object.entries(players)) {
+        state.remotePlayers.set(id, new RemotePlayer(data));
+      }
+    },
+    onJoin: (player) => {
+      state.remotePlayers.set(player.id, new RemotePlayer(player));
+      showToast(`${player.name} bergabung ke ruang virtual.`);
+    },
+    onMove: (data) => {
+      const rp = state.remotePlayers.get(data.id);
+      if (rp) {
+        rp.applySync(data);
+      } else {
+        state.remotePlayers.set(data.id, new RemotePlayer(data));
+      }
+    },
+    onAvatar: (id, avatar) => {
+      const rp = state.remotePlayers.get(id);
+      if (rp) rp.spriteName = avatar;
+    },
+    onLeave: (id) => {
+      const rp = state.remotePlayers.get(id);
+      if (rp) {
+        showToast(`${rp.name} meninggalkan ruangan.`);
+        state.remotePlayers.delete(id);
+      }
+    },
+  });
+  state.socket.connect();
 
   // Audio is synthesised, so nothing to download — it just needs a gesture to
   // start, because browsers block audio until the player interacts.
@@ -994,6 +1046,8 @@ function update(dt) {
   }
 
   for (const n of state.npcs) n.update(map, dt);
+  for (const rp of state.remotePlayers.values()) rp.update(dt);
+  state.socket?.syncMove(player);
   state.shadows?.update(dt);
   state.critters?.update(dt, time.hour24);
   for (const a of state.animals) a.update(map, dt);
@@ -1204,7 +1258,7 @@ function render() {
     if (o.x < cx - 160 || o.x > cx + W + 160 || o.y < cy - 96 || o.y > cy + H + 256) continue;
     drawables.push(o);
   }
-  drawables.push(player, ...state.npcs, ...state.animals);
+  drawables.push(player, ...state.npcs, ...state.animals, ...state.remotePlayers.values());
   const critters = state.critters?.split() ?? { ground: [], airDay: [], airNight: [] };
   for (const s of critters.ground) drawables.push({ y: s.y, critter: s });
   drawables.sort((a, b) => a.y - b.y);

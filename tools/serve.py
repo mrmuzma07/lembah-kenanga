@@ -31,6 +31,7 @@ from urllib.parse import urlparse, parse_qs
 import chat
 import guard
 import players
+import ws
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -95,6 +96,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if not self._rebase():
             return
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            if ws.handle(self):
+                return
         if self._api("GET"):
             return
         super().do_GET()
