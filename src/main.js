@@ -18,6 +18,8 @@ import { GameSocket } from './network/socket.js';
 import { LiveKitBridge } from './network/livekit-bridge.js';
 import { SpatialAVSystem } from './systems/spatial-av.js';
 import { drawZones } from './world/zones.js';
+import { VideoOverlay } from './ui/video-overlay.js';
+import { AVControls } from './ui/av-controls.js';
 import { Inventory, setItemData, itemDef, HOTBAR } from './systems/inventory.js';
 import { Farming } from './systems/farming.js';
 import { Weather } from './systems/weather.js';
@@ -56,6 +58,8 @@ const state = {
   socket: null,
   livekit: null,
   spatialAV: null,
+  videoOverlay: null,
+  avControls: null,
   camera: new Camera(view.w, view.h),
   dialog: new Dialog(),
   inv: new Inventory(),
@@ -229,25 +233,51 @@ async function boot() {
     },
   });
 
+  state.videoOverlay = new VideoOverlay({
+    livekitBridge: null,
+  });
+
   state.livekit = new LiveKitBridge({
     onParticipantConnected: (participant) => {
       // Participant connected to room
     },
     onParticipantDisconnected: (participant) => {
       state.spatialAV?.detachAudioTrack(participant.identity);
+      state.videoOverlay?.detachVideoTrack(participant.identity);
+      state.videoOverlay?.unregisterScreenTrack(participant.identity);
     },
     onTrackSubscribed: (track, publication, participant) => {
       if (track.kind === 'audio') {
         state.spatialAV?.attachAudioTrack(track, participant.identity);
+      } else if (track.kind === 'video') {
+        if (publication?.source === 'screen_share' || track.source === 'screen_share') {
+          state.videoOverlay?.registerScreenTrack(participant.identity, track);
+          showToast(`🖥️ ${participant.identity} membagikan layar!`);
+        } else {
+          state.videoOverlay?.attachVideoTrack(participant.identity, track);
+        }
       }
     },
     onTrackUnsubscribed: (track, publication, participant) => {
       if (track.kind === 'audio') {
         state.spatialAV?.detachAudioTrack(participant.identity);
+      } else if (track.kind === 'video') {
+        state.videoOverlay?.detachVideoTrack(participant.identity);
+        state.videoOverlay?.unregisterScreenTrack(participant.identity);
       }
+    },
+    onActiveSpeakersChanged: (speakers) => {
+      state.videoOverlay?.setActiveSpeakers(speakers);
     },
   });
   state.spatialAV.bridge = state.livekit;
+  state.videoOverlay.bridge = state.livekit;
+
+  state.avControls = new AVControls({
+    livekitBridge: state.livekit,
+    videoOverlay: state.videoOverlay,
+    onToast: (msg) => showToast(msg, 2.5),
+  });
 
   state.livekit.fetchToken(state.profile.name, 'valley', avatarOf(state.profile))
     .then((auth) => {
@@ -1082,6 +1112,9 @@ function update(dt) {
     // melompati event jam, sehingga jadwal warga dan lampu malam tidak ikut
     // berubah — persis hal yang biasanya ingin dilihat saat menekan tombol ini.
     if (input.pressed('debugTime')) { time.skip(60); showToast(`[debug] ${time.clockText}`); }
+    if (input.pressed('toggleMic')) state.avControls?.toggleMic();
+    if (input.pressed('toggleCam')) state.avControls?.toggleCam();
+    if (input.pressed('toggleScreen')) state.avControls?.toggleScreen();
     if (input.pressed('zoom')) {
       const z = renderer.cycleZoom();
       let desc = `otomatis (×${view.zoom})`;
@@ -1096,6 +1129,13 @@ function update(dt) {
   for (const n of state.npcs) n.update(map, dt);
   for (const rp of state.remotePlayers.values()) rp.update(dt);
   state.spatialAV?.update(player, state.remotePlayers, dt);
+  state.videoOverlay?.update({
+    canvas,
+    camera: state.camera,
+    view,
+    player,
+    remotePlayers: state.remotePlayers,
+  });
   state.socket?.syncMove(player);
   state.shadows?.update(dt);
   state.critters?.update(dt, time.hour24);

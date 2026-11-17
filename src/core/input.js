@@ -17,6 +17,9 @@ const BINDINGS = {
   nextTool: ['KeyX'],
   prevTool: ['KeyZ'],
   zoom: ['KeyF'],
+  toggleMic: ['KeyM'],
+  toggleCam: ['KeyV'],
+  toggleScreen: ['KeyP'],
   debugSeason: ['KeyN'],
   debugTime: ['KeyT'],
 };
